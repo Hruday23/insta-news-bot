@@ -18,7 +18,6 @@ const GRAPH_VERSION = 'v22.0';
 
 const args = process.argv.slice(2);
 const rawNicheArg = (args.find((a) => a.startsWith('--niche=')) || '').split('=')[1]?.toLowerCase();
-// Normalize 'ipl' to 'cricket' so both --niche=ipl and --niche=cricket share the same state file
 const activeNiche = rawNicheArg === 'ipl' ? 'cricket' : (rawNicheArg || 'general');
 
 const DB_FILE = `./posted-${activeNiche}.json`;
@@ -61,7 +60,6 @@ const FEEDS_BY_NICHE = {
 function isFreshRelevantArticle(item, feedKey) {
   const title = (item.title || '').toLowerCase();
 
-  // Block stale IPL 2020-2026 match reports and outdated season articles
   if (feedKey === 'cricket') {
     if (/\bipl\s*(2020|2021|2022|2023|2024|2025|2026)\b/i.test(title)) return false;
   }
@@ -107,7 +105,54 @@ async function isValidDecodedImage(page, dataUri) {
   }, dataUri);
 }
 
-async function searchImageViaPlaywright(browser, query) {
+// Vision check: rejects wrong people/jerseys and split-screen collages before rendering
+async function verifyImageMatchesHeadline(dataUri, headline, expectedSubject) {
+  try {
+    const match = dataUri.match(/^data:(image\/[a-zA-Z0-9+.-]+);base64,(.+)$/);
+    if (!match) return false;
+    const [, mimeType, base64Data] = match;
+
+    const response = await ai.models.generateContent({
+      model: 'gemini-3.5-flash-lite',
+      contents: [
+        {
+          inlineData: {
+            mimeType,
+            data: base64Data,
+          },
+        },
+        `Headline: "${headline}"
+Expected main subject: "${expectedSubject}"
+
+Does this image accurately match the headline and show the expected subject (not a different famous player/person, and not a split-screen multi-photo collage)?`,
+      ],
+      config: {
+        systemInstruction:
+          'You are a strict photo editor for a news page. Return match=false if the image shows the wrong person/team, is a split-screen collage, has heavy watermark/text overlays, or is unrelated to the headline.',
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            match: { type: Type.BOOLEAN },
+            reason: { type: Type.STRING },
+          },
+          required: ['match', 'reason'],
+        },
+      },
+    });
+
+    const verdict = JSON.parse(response.text);
+    if (!verdict.match) {
+      console.log(`Rejected candidate image (${verdict.reason})`);
+    }
+    return Boolean(verdict.match);
+  } catch (err) {
+    console.error('Vision verification error:', err.message);
+    return false;
+  }
+}
+
+async function searchImageViaPlaywright(browser, query, headline) {
   const page = await browser.newPage({
     viewport: { width: 1280, height: 900 },
     userAgent:
@@ -131,7 +176,7 @@ async function searchImageViaPlaywright(browser, query) {
             results.push(meta.murl);
           }
         } catch {}
-        if (results.length >= 10) break;
+        if (results.length >= 12) break;
       }
       return results;
     });
@@ -147,25 +192,9 @@ async function searchImageViaPlaywright(browser, query) {
         if (buffer.length < 20000) continue;
 
         const dataUri = `data:${contentType.split(';')[0]};base64,${buffer.toString('base64')}`;
-        if (await isValidDecodedImage(page, dataUri)) {
-          return dataUri;
-        }
-      } catch {}
-    }
+        if (!(await isValidDecodedImage(page, dataUri))) continue;
 
-    const thumbUrls = await page.evaluate(() => {
-      return Array.from(document.querySelectorAll('img.mimg'))
-        .map((img) => img.src)
-        .filter((src) => src && src.startsWith('http'));
-    });
-
-    for (const tUrl of thumbUrls.slice(0, 6)) {
-      try {
-        const res = await page.request.get(tUrl, { timeout: 6000 });
-        if (!res.ok()) continue;
-        const buf = await res.body();
-        const dataUri = `data:image/jpeg;base64,${buf.toString('base64')}`;
-        if (await isValidDecodedImage(page, dataUri)) {
+        if (await verifyImageMatchesHeadline(dataUri, headline, query)) {
           return dataUri;
         }
       } catch {}
@@ -187,14 +216,14 @@ Article Title: ${title}
 Details: ${snippet}`,
     config: {
       systemInstruction:
-        'You run a viral Indian Tech, Upcoming IPL 2027 & International Cricket, and Trending India Instagram page. Never frame old 2026 IPL match results as breaking news. Return: 1) cardHeadline: bold punchy headline (max 9 words, no emojis), 2) cardSummary: informative 2-3 sentence news summary (26 to 34 words) for the graphic card, 3) imageKeyword: 2-4 specific search terms for finding a real photo (e.g. "MS Dhoni IPL auction", "Indian cricket team Test match", "Apple iPhone launch"), and 4) caption: engaging 2-sentence Instagram caption ending with a debate question for comments, followed by 4 niche hashtags plus #eviwibe.',
+        'You run a viral Indian Tech, Upcoming IPL 2027 & International Cricket, and Trending India Instagram page. Never frame old 2026 IPL match results as breaking news. Return: 1) cardHeadline: bold punchy headline (max 9 words, no emojis), 2) cardSummary: informative 2-3 sentence news summary (26 to 34 words) for the graphic card, 3) imageKeyword: exact full name of the primary person, product, or event in the headline plus 1 context word (e.g. "Paras Mhambrey cricket coach", "Apple iPhone 18 launch")—never use vague team-only queries that return unrelated players, and 4) caption: engaging 2-sentence Instagram caption ending with a debate question for comments, followed by 4 niche hashtags plus #eviwibe.',
       responseMimeType: 'application/json',
       responseSchema: {
         type: Type.OBJECT,
         properties: {
           cardHeadline: { type: Type.STRING, description: 'Max 9 words bold headline' },
           cardSummary: { type: Type.STRING, description: '26 to 34 words summary content' },
-          imageKeyword: { type: Type.STRING, description: '2-4 specific keywords for photo search' },
+          imageKeyword: { type: Type.STRING, description: 'Exact primary person/product name + 1 context word' },
           caption: { type: Type.STRING, description: 'Instagram caption with hashtags including #eviwibe' },
         },
         required: ['cardHeadline', 'cardSummary', 'imageKeyword', 'caption'],
@@ -266,6 +295,7 @@ async function renderNewsCard(browser, { cardHeadline, cardSummary, articleImage
           width: 1080px;
           height: 1350px;
           object-fit: cover;
+          object-position: center top;
           z-index: 1;
         }
         .dynamic-gradient {
@@ -425,13 +455,17 @@ async function checkAndPostNews() {
         try {
           console.log(`New [${feedSource.niche}] story: ${item.title}`);
           const copy = await generateNewsCopy(item.title, item.contentSnippet || '', feedSource.niche);
-          const articleImageBase64 = await searchImageViaPlaywright(browser, copy.imageKeyword);
+          const articleImageBase64 = await searchImageViaPlaywright(
+            browser,
+            copy.imageKeyword,
+            copy.cardHeadline
+          );
 
           if (!articleImageBase64) {
-            console.log(`No verified high-res image for "${copy.imageKeyword}" — skipping.`);
+            console.log(`No vision-verified photo for "${copy.imageKeyword}" — skipping.`);
             continue;
           }
-          console.log(`Verified high-res image attached (${copy.imageKeyword}).`);
+          console.log(`Vision-verified photo attached (${copy.imageKeyword}).`);
 
           await renderNewsCard(browser, { ...copy, articleImageBase64 }, LOCAL_JPG);
 
