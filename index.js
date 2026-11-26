@@ -98,7 +98,7 @@ async function isValidDecodedImage(page, dataUri) {
   return await page.evaluate(async (src) => {
     return new Promise((resolve) => {
       const img = new Image();
-      img.onload = () => resolve(img.naturalWidth >= 400 && img.naturalHeight >= 300);
+      img.onload = () => resolve(img.naturalWidth >= 800 && img.naturalHeight >= 600);
       img.onerror = () => resolve(false);
       img.src = src;
     });
@@ -128,7 +128,7 @@ Does this image accurately match the headline and show the expected subject (not
       ],
       config: {
         systemInstruction:
-          'You are a strict photo editor for a news page. Return match=false if the image shows the wrong person/team, is a split-screen collage, has heavy watermark/text overlays, or is unrelated to the headline.',
+          'You are a strict photo editor for a news page. Return match=false if the image is blurry, pixelated, low-resolution, a YouTube thumbnail with large background text/banners, a split-screen collage, has watermarks, or shows the wrong person/team.',
         responseMimeType: 'application/json',
         responseSchema: {
           type: Type.OBJECT,
@@ -162,7 +162,7 @@ async function searchImageViaPlaywright(browser, query, headline) {
   try {
     const searchUrl = `https://www.bing.com/images/search?q=${encodeURIComponent(
       query
-    )}&qft=+filterui:imagesize-large&form=IRFLTR`;
+    )}&qft=+filterui:imagesize-wallpaper&form=IRFLTR`;
     await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
     await page.waitForTimeout(2500);
 
@@ -189,7 +189,7 @@ async function searchImageViaPlaywright(browser, query, headline) {
         if (!contentType.startsWith('image/')) continue;
 
         const buffer = await response.body();
-        if (buffer.length < 20000) continue;
+        if (buffer.length < 60000) continue;
 
         const dataUri = `data:${contentType.split(';')[0]};base64,${buffer.toString('base64')}`;
         if (!(await isValidDecodedImage(page, dataUri))) continue;
@@ -503,3 +503,4 @@ if (args.includes('--loop')) {
 } else {
   process.exit(0);
 }
+
