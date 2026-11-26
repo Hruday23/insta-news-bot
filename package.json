@@ -1,0 +1,26 @@
+﻿{
+    "name":  "insta-news-bot",
+    "version":  "1.0.0",
+    "description":  "",
+    "main":  "index.js",
+    "scripts":  {
+                    "start":  "node index.js",
+                    "post:viral":  "node index.js --niche=viral",
+                    "post:cricket":  "node index.js --niche=cricket",
+                    "post:ipl":  "node index.js --niche=cricket",
+                    "post:tech":  "node index.js --niche=tech"
+                },
+    "keywords":  [
+
+                 ],
+    "author":  "",
+    "license":  "ISC",
+    "type":  "module",
+    "dependencies":  {
+                         "@google/genai":  "^3.6.1",
+                         "cloudinary":  "^2.11.0",
+                         "dotenv":  "^18.0.10",
+                         "playwright":  "^1.65.1",
+                         "rss-parser":  "^3.13.0"
+                     }
+}

@@ -1,0 +1,53 @@
+﻿name: Simultaneous Viral, Cricket & Tech Auto-Poster
+
+on:
+  schedule:
+    - cron: '0 */2 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publish-niche:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        niche: [viral, cricket, tech]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies and Playwright Chromium
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Run ${{ matrix.niche }} bot
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          CLOUDINARY_CLOUD_NAME: ${{ secrets.CLOUDINARY_CLOUD_NAME }}
+          CLOUDINARY_API_KEY: ${{ secrets.CLOUDINARY_API_KEY }}
+          CLOUDINARY_API_SECRET: ${{ secrets.CLOUDINARY_API_SECRET }}
+          IG_USER_ID: ${{ secrets.IG_USER_ID }}
+          IG_ACCESS_TOKEN: ${{ secrets.IG_ACCESS_TOKEN }}
+        run: node index.js --niche=${{ matrix.niche }}
+
+      - name: Save posted-${{ matrix.niche }}.json safely
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add posted-${{ matrix.niche }}.json
+          if ! git diff --staged --quiet; then
+            git commit -m "chore(${{ matrix.niche }}): update posted links [skip ci]"
+            for i in 1 2 3 4 5; do
+              git pull --rebase origin main && git push && break || sleep 3
+            done
+          fi
